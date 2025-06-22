@@ -4,7 +4,7 @@ A comprehensive solution for managing Kubernetes clusters across multiple cloud 
 
 ## 🚀 Features
 
-- **Multi-Cloud Support**: Manage Kubernetes clusters on Azure (AKS), AWS (EKS), and Google Cloud (GKE)
+- **Multi-Cloud Support**: Manage Kubernetes clusters on Azure (AKS), AWS (EKS), Google Cloud (GKE), and Azure Red Hat OpenShift (ARO)
 - **GitHub Actions Workflows**: Automated cluster operations with manual triggers
 - **Terraform Infrastructure as Code**: Declarative infrastructure management
 - **Environment-Based Configurations**: Predefined configurations for development, staging, and production
@@ -18,6 +18,7 @@ multicloud/
 ├── .github/
 │   └── workflows/
 │       ├── kubernetes-cluster-management.yml    # GitHub Actions for cluster operations
+│       └── kubernetes-version-upgrade.yml      # GitHub Actions for version upgrades
 │       └── terraform-deploy.yml                 # Terraform deployment workflow
 ├── config/
 │   └── cluster-configs.yml                      # Cluster configurations
@@ -89,7 +90,7 @@ Create environments in your repository:
 3. Click **Run workflow**
 4. Configure parameters:
    - **Operation**: create, update, delete
-   - **Cloud Platform**: aks, eks, gke, all
+   - **Cloud Platform**: aks, eks, gke, aro, all
    - **Cluster Name**: Name for your cluster
    - **Region**: Cloud region
    - **Node Count**: Number of nodes
@@ -112,11 +113,21 @@ Create environments in your repository:
 ### Create Development Clusters on All Platforms
 ```yaml
 Operation: create
-Cloud Platform: all
+Cloud Platform: all (includes aro)
 Cluster Name: dev-cluster
 Region: us-east-1
 Node Count: 2
 Node Size: Standard_DS2_v2
+```
+
+### Create an ARO Cluster
+```yaml
+Operation: create
+Cloud Platform: aro
+Cluster Name: aro-cluster
+Region: eastus
+Node Count: 3
+Node Size: Standard_D4s_v3
 ```
 
 ### Update Production EKS Cluster
@@ -143,6 +154,7 @@ The `config/cluster-configs.yml` file contains predefined configurations:
 - **Development**: 2 nodes, smaller instance types
 - **Staging**: 3 nodes, medium instance types
 - **Production**: 5+ nodes, larger instance types with additional features
+- **ARO**: Uses Azure CLI and supports similar node/region parameters
 
 ### Customization
 
