@@ -20,6 +20,7 @@ on:
           - aks
           - eks
           - gke
+          - aro
           - all
       cluster_name:
         description: 'Name of the cluster'
@@ -231,9 +232,71 @@ jobs:
           kubectl get nodes
           kubectl cluster-info
 
+  # Azure Red Hat OpenShift (ARO) Management
+  aro-management:
+    if: ${{ github.event.inputs.cloud_platform == 'aro' || github.event.inputs.cloud_platform == 'all' }}
+    runs-on: ubuntu-latest
+    environment: azure
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set Azure CLI version
+        run: az version
+
+      - name: Create ARO Cluster
+        if: ${{ github.event.inputs.operation == 'create' }}
+        run: |
+          az aro create \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
+            --location ${{ github.event.inputs.region || 'eastus' }} \
+            --master-vm-size ${{ github.event.inputs.node_size || 'Standard_D8s_v3' }} \
+            --worker-vm-size ${{ github.event.inputs.node_size || 'Standard_D4s_v3' }} \
+            --worker-count ${{ github.event.inputs.node_count || '3' }} \
+            --api-server-visibility Public \
+            --ingress-visibility Public
+
+      - name: Update (Scale) ARO Cluster
+        if: ${{ github.event.inputs.operation == 'update' }}
+        run: |
+          az aro update \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
+            --worker-count ${{ github.event.inputs.node_count || '3' }}
+
+      - name: Delete ARO Cluster
+        if: ${{ github.event.inputs.operation == 'delete' }}
+        run: |
+          az aro delete \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
+            --yes
+
+      - name: Get ARO Credentials
+        if: ${{ github.event.inputs.operation == 'create' || github.event.inputs.operation == 'update' }}
+        run: |
+          # ARO does not use kubeconfig in the same way as AKS/EKS/GKE. Output API server and credentials info.
+          az aro show \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
+            --query '{apiServer:apiserverProfile.url,console:consoleProfile.url,username:clusterProfile.username,password:clusterProfile.password}'
+
+      - name: Verify ARO Cluster
+        if: ${{ github.event.inputs.operation == 'create' || github.event.inputs.operation == 'update' }}
+        run: |
+          az aro show \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
+
   # Summary and Notifications
   summary:
-    needs: [aks-management, eks-management, gke-management]
+    needs: [aks-management, eks-management, gke-management, aro-management]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -249,4 +312,5 @@ jobs:
           echo "### Job Results:" >> $GITHUB_STEP_SUMMARY
           echo "- AKS Management: ${{ needs.aks-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
           echo "- EKS Management: ${{ needs.eks-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- GKE Management: ${{ needs.gke-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY 
+          echo "- GKE Management: ${{ needs.gke-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- ARO Management: ${{ needs.aro-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY 
