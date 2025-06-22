@@ -119,6 +119,22 @@ get_gke_credentials() {
     fi
 }
 
+# Get cluster credentials for ARO
+get_aro_credentials() {
+    local cluster_name="${CLUSTER_NAME}-aro"
+    local resource_group="${AZURE_RESOURCE_GROUP:-${CLUSTER_NAME}-aro-rg}"
+    
+    log_info "Getting ARO cluster information..."
+    
+    if az aro show --resource-group "$resource_group" --name "$cluster_name" --query '{apiServer:apiserverProfile.url,console:consoleProfile.url,username:clusterProfile.username,password:clusterProfile.password}' -o json 2>/dev/null; then
+        log_success "ARO cluster information retrieved successfully"
+        log_info "Note: ARO uses different authentication method. Use the API server URL and credentials above."
+    else
+        log_error "Failed to get ARO cluster information"
+        return 1
+    fi
+}
+
 # Verify cluster health
 verify_cluster() {
     local platform="$1"
@@ -204,6 +220,19 @@ get_all_cluster_status() {
             log_warning "GCP_PROJECT_ID not set, skipping GKE check"
         fi
     fi
+    
+    # ARO
+    if command -v az &> /dev/null; then
+        local resource_group="${AZURE_RESOURCE_GROUP:-${CLUSTER_NAME}-aro-rg}"
+        local aro_cluster="${CLUSTER_NAME}-aro"
+        
+        log_info "Checking ARO cluster status..."
+        if az aro show --resource-group "$resource_group" --name "$aro_cluster" --query "{name:name,state:provisioningState,version:clusterProfile.version}" -o table 2>/dev/null; then
+            log_success "ARO cluster is accessible"
+        else
+            log_warning "ARO cluster not found or not accessible"
+        fi
+    fi
 }
 
 # Scale cluster nodes
@@ -253,6 +282,17 @@ scale_cluster() {
                 return 1
             fi
             ;;
+        "aro")
+            local resource_group="${AZURE_RESOURCE_GROUP:-${CLUSTER_NAME}-aro-rg}"
+            local cluster_name="${CLUSTER_NAME}-aro"
+            
+            if az aro update --resource-group "$resource_group" --name "$cluster_name" --worker-count "$node_count"; then
+                log_success "ARO cluster scaled successfully"
+            else
+                log_error "Failed to scale ARO cluster"
+                return 1
+            fi
+            ;;
         *)
             log_error "Unsupported platform: $platform"
             return 1
@@ -269,7 +309,7 @@ Usage: $0 [COMMAND] [OPTIONS]
 
 Commands:
     check-prerequisites    Check if required tools are installed
-    get-credentials [PLATFORM]  Get cluster credentials for specified platform (aks|eks|gke|all)
+    get-credentials [PLATFORM]  Get cluster credentials for specified platform (aks|eks|gke|aro|all)
     verify-cluster [PLATFORM]   Verify cluster health for specified platform
     get-status              Get status of all clusters
     scale [PLATFORM] [COUNT]    Scale cluster to specified node count
@@ -290,6 +330,7 @@ Examples:
     $0 get-credentials all
     $0 verify-cluster aks
     $0 scale eks 5
+    $0 scale aro 3
     $0 get-status
 
 EOF
@@ -312,13 +353,17 @@ main() {
                 "gke")
                     get_gke_credentials
                     ;;
+                "aro")
+                    get_aro_credentials
+                    ;;
                 "all")
                     get_aks_credentials || true
                     get_eks_credentials || true
                     get_gke_credentials || true
+                    get_aro_credentials || true
                     ;;
                 *)
-                    log_error "Please specify platform: aks, eks, gke, or all"
+                    log_error "Please specify platform: aks, eks, gke, aro, or all"
                     exit 1
                     ;;
             esac
@@ -337,8 +382,12 @@ main() {
                     get_gke_credentials
                     verify_cluster "GKE" "${CLUSTER_NAME}-gke"
                     ;;
+                "aro")
+                    get_aro_credentials
+                    log_info "ARO verification: Use the API server URL and credentials from get-credentials to access the cluster"
+                    ;;
                 *)
-                    log_error "Please specify platform: aks, eks, or gke"
+                    log_error "Please specify platform: aks, eks, gke, or aro"
                     exit 1
                     ;;
             esac
