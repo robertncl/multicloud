@@ -1,0 +1,252 @@
+name: Kubernetes Cluster Management
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'Operation to perform'
+        required: true
+        default: 'create'
+        type: choice
+        options:
+          - create
+          - update
+          - delete
+      cloud_platform:
+        description: 'Cloud platform to target'
+        required: true
+        type: choice
+        options:
+          - aks
+          - eks
+          - gke
+          - all
+      cluster_name:
+        description: 'Name of the cluster'
+        required: false
+        type: string
+        default: 'multicloud-cluster'
+      region:
+        description: 'Region for the cluster'
+        required: false
+        type: string
+        default: 'us-east-1'
+      node_count:
+        description: 'Number of nodes'
+        required: false
+        type: string
+        default: '3'
+      node_size:
+        description: 'Node size/type'
+        required: false
+        type: string
+        default: 'Standard_DS2_v2'
+
+env:
+  AZURE_CLUSTER_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
+  AWS_CLUSTER_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
+  GCP_CLUSTER_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
+  REGION: ${{ github.event.inputs.region || 'us-east-1' }}
+  NODE_COUNT: ${{ github.event.inputs.node_count || '3' }}
+  NODE_SIZE: ${{ github.event.inputs.node_size || 'Standard_DS2_v2' }}
+
+jobs:
+  # Azure Kubernetes Service (AKS) Management
+  aks-management:
+    if: ${{ github.event.inputs.cloud_platform == 'aks' || github.event.inputs.cloud_platform == 'all' }}
+    runs-on: ubuntu-latest
+    environment: azure
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set Azure CLI version
+        run: az version
+
+      - name: Create AKS Cluster
+        if: ${{ github.event.inputs.operation == 'create' }}
+        run: |
+          az aks create \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ env.AZURE_CLUSTER_NAME }} \
+            --node-count ${{ env.NODE_COUNT }} \
+            --node-vm-size ${{ env.NODE_SIZE }} \
+            --location ${{ env.REGION }} \
+            --enable-addons monitoring \
+            --generate-ssh-keys
+
+      - name: Update AKS Cluster
+        if: ${{ github.event.inputs.operation == 'update' }}
+        run: |
+          az aks scale \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ env.AZURE_CLUSTER_NAME }} \
+            --node-count ${{ env.NODE_COUNT }}
+
+      - name: Delete AKS Cluster
+        if: ${{ github.event.inputs.operation == 'delete' }}
+        run: |
+          az aks delete \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ env.AZURE_CLUSTER_NAME }} \
+            --yes
+
+      - name: Get AKS Credentials
+        if: ${{ github.event.inputs.operation == 'create' || github.event.inputs.operation == 'update' }}
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ env.AZURE_CLUSTER_NAME }} \
+            --overwrite-existing
+
+      - name: Verify AKS Cluster
+        if: ${{ github.event.inputs.operation == 'create' || github.event.inputs.operation == 'update' }}
+        run: |
+          kubectl get nodes
+          kubectl cluster-info
+
+  # Amazon Elastic Kubernetes Service (EKS) Management
+  eks-management:
+    if: ${{ github.event.inputs.cloud_platform == 'eks' || github.event.inputs.cloud_platform == 'all' }}
+    runs-on: ubuntu-latest
+    environment: aws
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Install eksctl
+        run: |
+          curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+          sudo mv /tmp/eksctl /usr/local/bin
+          eksctl version
+
+      - name: Create EKS Cluster
+        if: ${{ github.event.inputs.operation == 'create' }}
+        run: |
+          eksctl create cluster \
+            --name ${{ env.AWS_CLUSTER_NAME }} \
+            --region ${{ env.REGION }} \
+            --nodegroup-name standard-workers \
+            --node-type m5.large \
+            --nodes ${{ env.NODE_COUNT }} \
+            --nodes-min 1 \
+            --nodes-max 10 \
+            --managed
+
+      - name: Update EKS Cluster
+        if: ${{ github.event.inputs.operation == 'update' }}
+        run: |
+          eksctl scale nodegroup \
+            --cluster=${{ env.AWS_CLUSTER_NAME }} \
+            --region=${{ env.REGION }} \
+            --name=standard-workers \
+            --nodes=${{ env.NODE_COUNT }}
+
+      - name: Delete EKS Cluster
+        if: ${{ github.event.inputs.operation == 'delete' }}
+        run: |
+          eksctl delete cluster \
+            --name ${{ env.AWS_CLUSTER_NAME }} \
+            --region ${{ env.REGION }}
+
+      - name: Update kubeconfig
+        if: ${{ github.event.inputs.operation == 'create' || github.event.inputs.operation == 'update' }}
+        run: |
+          aws eks update-kubeconfig --name ${{ env.AWS_CLUSTER_NAME }} --region ${{ env.REGION }}
+
+      - name: Verify EKS Cluster
+        if: ${{ github.event.inputs.operation == 'create' || github.event.inputs.operation == 'update' }}
+        run: |
+          kubectl get nodes
+          kubectl cluster-info
+
+  # Google Kubernetes Engine (GKE) Management
+  gke-management:
+    if: ${{ github.event.inputs.cloud_platform == 'gke' || github.event.inputs.cloud_platform == 'all' }}
+    runs-on: ubuntu-latest
+    environment: gcp
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Google Auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker
+
+      - name: Create GKE Cluster
+        if: ${{ github.event.inputs.operation == 'create' }}
+        run: |
+          gcloud container clusters create ${{ env.GCP_CLUSTER_NAME }} \
+            --zone ${{ env.REGION }}-a \
+            --num-nodes ${{ env.NODE_COUNT }} \
+            --machine-type e2-standard-2 \
+            --enable-autoscaling \
+            --min-nodes 1 \
+            --max-nodes 10 \
+            --enable-autorepair \
+            --enable-autoupgrade
+
+      - name: Update GKE Cluster
+        if: ${{ github.event.inputs.operation == 'update' }}
+        run: |
+          gcloud container clusters resize ${{ env.GCP_CLUSTER_NAME }} \
+            --zone ${{ env.REGION }}-a \
+            --num-nodes ${{ env.NODE_COUNT }}
+
+      - name: Delete GKE Cluster
+        if: ${{ github.event.inputs.operation == 'delete' }}
+        run: |
+          gcloud container clusters delete ${{ env.GCP_CLUSTER_NAME }} \
+            --zone ${{ env.REGION }}-a \
+            --quiet
+
+      - name: Get GKE Credentials
+        if: ${{ github.event.inputs.operation == 'create' || github.event.inputs.operation == 'update' }}
+        run: |
+          gcloud container clusters get-credentials ${{ env.GCP_CLUSTER_NAME }} \
+            --zone ${{ env.REGION }}-a
+
+      - name: Verify GKE Cluster
+        if: ${{ github.event.inputs.operation == 'create' || github.event.inputs.operation == 'update' }}
+        run: |
+          kubectl get nodes
+          kubectl cluster-info
+
+  # Summary and Notifications
+  summary:
+    needs: [aks-management, eks-management, gke-management]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Operation Summary
+        run: |
+          echo "## Kubernetes Cluster Management Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**Operation:** ${{ github.event.inputs.operation }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Target Platforms:** ${{ github.event.inputs.cloud_platform }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster Name:** ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ github.event.inputs.region || 'us-east-1' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Node Count:** ${{ github.event.inputs.node_count || '3' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Results:" >> $GITHUB_STEP_SUMMARY
+          echo "- AKS Management: ${{ needs.aks-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- EKS Management: ${{ needs.eks-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- GKE Management: ${{ needs.gke-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY 
