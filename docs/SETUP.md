@@ -7,14 +7,14 @@ This guide explains how to set up and configure the GitHub Actions workflow for 
 Before using this workflow, ensure you have:
 
 1. **GitHub Repository**: A GitHub repository with Actions enabled
-2. **Cloud Platform Accounts**: Active accounts on Azure, AWS, and/or Google Cloud
-3. **Required Permissions**: Appropriate permissions to create/manage Kubernetes clusters
+2. **Cloud Platform Accounts**: Active accounts on Azure, AWS, Google Cloud, and/or Azure Red Hat OpenShift (ARO)
+3. **Required Permissions**: Appropriate permissions to create/manage Kubernetes clusters (including ARO)
 
 ## Required GitHub Secrets
 
 You need to configure the following secrets in your GitHub repository:
 
-### Azure (AKS) Secrets
+### Azure (AKS/ARO) Secrets
 - `AZURE_CREDENTIALS`: Service principal credentials in JSON format
 - `AZURE_RESOURCE_GROUP`: Name of the Azure resource group
 
@@ -92,7 +92,7 @@ Each environment can have additional protection rules and secrets if needed.
 3. Click "Run workflow"
 4. Fill in the required parameters:
    - **Operation**: create, update, or delete
-   - **Cloud Platform**: aks, eks, gke, or all
+   - **Cloud Platform**: aks, eks, gke, aro, or all
    - **Cluster Name**: Name for your cluster
    - **Region**: Cloud region
    - **Node Count**: Number of nodes
@@ -119,6 +119,14 @@ Each environment can have additional protection rules and secrets if needed.
 - Cloud Platform: `gke`
 - Cluster Name: `staging-cluster`
 
+#### Create an ARO cluster:
+- Operation: `create`
+- Cloud Platform: `aro`
+- Cluster Name: `aro-cluster`
+- Region: `eastus`
+- Node Count: `3`
+- Node Size: `Standard_D4s_v3`
+
 ## Configuration Files
 
 The `config/cluster-configs.yml` file contains predefined configurations for different environments (development, staging, production) across all platforms.
@@ -135,7 +143,7 @@ After cluster creation/update, the workflow will:
 
 ### Common Issues
 
-1. **Authentication Errors**: Verify your cloud credentials are correct and have sufficient permissions
+1. **Authentication Errors**: Verify your cloud credentials are correct and have sufficient permissions (including for ARO)
 2. **Resource Quotas**: Check if you have sufficient quota in your cloud accounts
 3. **Region Availability**: Ensure the selected region supports the requested VM types
 4. **Network Issues**: Verify network connectivity and firewall rules
