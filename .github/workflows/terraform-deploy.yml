@@ -1,0 +1,291 @@
+name: Terraform Multi-Cloud Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'Terraform operation to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      cloud_platforms:
+        description: 'Cloud platforms to target'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - aks
+          - eks
+          - gke
+          - all
+      cluster_name:
+        description: 'Name of the cluster'
+        required: false
+        type: string
+        default: 'multicloud-cluster'
+      node_count:
+        description: 'Number of nodes'
+        required: false
+        type: string
+        default: '3'
+
+env:
+  TF_VERSION: "1.5.0"
+  CLUSTER_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
+  ENVIRONMENT: ${{ github.event.inputs.environment || 'development' }}
+  NODE_COUNT: ${{ github.event.inputs.node_count || '3' }}
+
+jobs:
+  terraform-setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod a+x /usr/local/bin/yq
+
+      - name: Configure Terraform Backend
+        run: |
+          mkdir -p ~/.terraform.d
+          echo '{"credentials": {"app.terraform.io": {"token": "${{ secrets.TF_API_TOKEN }}"}}}' > ~/.terraform.d/credentials.tfrc.json
+
+  # Azure (AKS) Terraform Operations
+  terraform-aks:
+    if: ${{ github.event.inputs.cloud_platforms == 'aks' || github.event.inputs.cloud_platforms == 'all' }}
+    needs: terraform-setup
+    runs-on: ubuntu-latest
+    environment: azure
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Terraform Init - AKS
+        working-directory: ./terraform
+        run: |
+          terraform init \
+            -backend-config="key=aks/${{ env.CLUSTER_NAME }}/terraform.tfstate" \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ secrets.TF_STATE_REGION }}"
+
+      - name: Terraform Plan - AKS
+        if: ${{ github.event.inputs.operation == 'plan' }}
+        working-directory: ./terraform
+        run: |
+          terraform plan \
+            -var="cluster_name=${{ env.CLUSTER_NAME }}-aks" \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="node_count=${{ env.NODE_COUNT }}" \
+            -out=aks-plan.tfplan
+
+      - name: Terraform Apply - AKS
+        if: ${{ github.event.inputs.operation == 'apply' }}
+        working-directory: ./terraform
+        run: |
+          terraform apply \
+            -var="cluster_name=${{ env.CLUSTER_NAME }}-aks" \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="node_count=${{ env.NODE_COUNT }}" \
+            -auto-approve
+
+      - name: Terraform Destroy - AKS
+        if: ${{ github.event.inputs.operation == 'destroy' }}
+        working-directory: ./terraform
+        run: |
+          terraform destroy \
+            -var="cluster_name=${{ env.CLUSTER_NAME }}-aks" \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="node_count=${{ env.NODE_COUNT }}" \
+            -auto-approve
+
+  # AWS (EKS) Terraform Operations
+  terraform-eks:
+    if: ${{ github.event.inputs.cloud_platforms == 'eks' || github.event.inputs.cloud_platforms == 'all' }}
+    needs: terraform-setup
+    runs-on: ubuntu-latest
+    environment: aws
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Terraform Init - EKS
+        working-directory: ./terraform
+        run: |
+          terraform init \
+            -backend-config="key=eks/${{ env.CLUSTER_NAME }}/terraform.tfstate" \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ secrets.TF_STATE_REGION }}"
+
+      - name: Terraform Plan - EKS
+        if: ${{ github.event.inputs.operation == 'plan' }}
+        working-directory: ./terraform
+        run: |
+          terraform plan \
+            -var="cluster_name=${{ env.CLUSTER_NAME }}-eks" \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="node_count=${{ env.NODE_COUNT }}" \
+            -out=eks-plan.tfplan
+
+      - name: Terraform Apply - EKS
+        if: ${{ github.event.inputs.operation == 'apply' }}
+        working-directory: ./terraform
+        run: |
+          terraform apply \
+            -var="cluster_name=${{ env.CLUSTER_NAME }}-eks" \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="node_count=${{ env.NODE_COUNT }}" \
+            -auto-approve
+
+      - name: Terraform Destroy - EKS
+        if: ${{ github.event.inputs.operation == 'destroy' }}
+        working-directory: ./terraform
+        run: |
+          terraform destroy \
+            -var="cluster_name=${{ env.CLUSTER_NAME }}-eks" \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="node_count=${{ env.NODE_COUNT }}" \
+            -auto-approve
+
+  # Google Cloud (GKE) Terraform Operations
+  terraform-gke:
+    if: ${{ github.event.inputs.cloud_platforms == 'gke' || github.event.inputs.cloud_platforms == 'all' }}
+    needs: terraform-setup
+    runs-on: ubuntu-latest
+    environment: gcp
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Google Auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Terraform Init - GKE
+        working-directory: ./terraform
+        run: |
+          terraform init \
+            -backend-config="key=gke/${{ env.CLUSTER_NAME }}/terraform.tfstate" \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ secrets.TF_STATE_REGION }}"
+
+      - name: Terraform Plan - GKE
+        if: ${{ github.event.inputs.operation == 'plan' }}
+        working-directory: ./terraform
+        run: |
+          terraform plan \
+            -var="cluster_name=${{ env.CLUSTER_NAME }}-gke" \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="node_count=${{ env.NODE_COUNT }}" \
+            -var="google_project_id=${{ secrets.GCP_PROJECT_ID }}" \
+            -out=gke-plan.tfplan
+
+      - name: Terraform Apply - GKE
+        if: ${{ github.event.inputs.operation == 'apply' }}
+        working-directory: ./terraform
+        run: |
+          terraform apply \
+            -var="cluster_name=${{ env.CLUSTER_NAME }}-gke" \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="node_count=${{ env.NODE_COUNT }}" \
+            -var="google_project_id=${{ secrets.GCP_PROJECT_ID }}" \
+            -auto-approve
+
+      - name: Terraform Destroy - GKE
+        if: ${{ github.event.inputs.operation == 'destroy' }}
+        working-directory: ./terraform
+        run: |
+          terraform destroy \
+            -var="cluster_name=${{ env.CLUSTER_NAME }}-gke" \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="node_count=${{ env.NODE_COUNT }}" \
+            -var="google_project_id=${{ secrets.GCP_PROJECT_ID }}" \
+            -auto-approve
+
+  # Summary and Notifications
+  summary:
+    needs: [terraform-aks, terraform-eks, terraform-gke]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Terraform Operation Summary
+        run: |
+          echo "## Terraform Multi-Cloud Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**Operation:** ${{ github.event.inputs.operation }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Target Platforms:** ${{ github.event.inputs.cloud_platforms }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster Name:** ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Node Count:** ${{ github.event.inputs.node_count || '3' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Results:" >> $GITHUB_STEP_SUMMARY
+          echo "- AKS Terraform: ${{ needs.terraform-aks.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- EKS Terraform: ${{ needs.terraform-eks.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- GKE Terraform: ${{ needs.terraform-gke.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event.inputs.operation }}" = "apply" ]; then
+            echo "1. Verify cluster creation in cloud consoles" >> $GITHUB_STEP_SUMMARY
+            echo "2. Configure kubectl for each cluster" >> $GITHUB_STEP_SUMMARY
+            echo "3. Deploy applications to the clusters" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ github.event.inputs.operation }}" = "destroy" ]; then
+            echo "1. Verify cluster deletion in cloud consoles" >> $GITHUB_STEP_SUMMARY
+            echo "2. Clean up any remaining resources manually if needed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "1. Review the plan output" >> $GITHUB_STEP_SUMMARY
+            echo "2. Run apply operation to create/update resources" >> $GITHUB_STEP_SUMMARY
+          fi 
