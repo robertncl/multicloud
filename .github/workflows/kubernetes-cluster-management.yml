@@ -20,7 +20,7 @@ on:
           - aks
           - eks
           - gke
-          - aro
+          - openshift
           - all
       cluster_name:
         description: 'Name of the cluster'
@@ -232,71 +232,102 @@ jobs:
           kubectl get nodes
           kubectl cluster-info
 
-  # Azure Red Hat OpenShift (ARO) Management
-  aro-management:
-    if: ${{ github.event.inputs.cloud_platform == 'aro' || github.event.inputs.cloud_platform == 'all' }}
+  # On-Premises OpenShift Management
+  openshift-management:
+    if: ${{ github.event.inputs.cloud_platform == 'openshift' || github.event.inputs.cloud_platform == 'all' }}
     runs-on: ubuntu-latest
-    environment: azure
+    environment: openshift
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Setup OpenShift CLI
+        run: |
+          # Install OpenShift CLI
+          curl -L https://mirror.openshift.com/pub/openshift-v4/clients/oc/latest/linux/oc.tar.gz | tar xz
+          sudo mv oc /usr/local/bin/
+          oc version
 
-      - name: Set Azure CLI version
-        run: az version
+      - name: Configure OpenShift Access
+        env:
+          OPENSHIFT_SERVER: ${{ secrets.OPENSHIFT_SERVER }}
+          OPENSHIFT_TOKEN: ${{ secrets.OPENSHIFT_TOKEN }}
+          OPENSHIFT_PROJECT: ${{ secrets.OPENSHIFT_PROJECT }}
+        run: |
+          oc login --token=$OPENSHIFT_TOKEN --server=$OPENSHIFT_SERVER
+          oc project $OPENSHIFT_PROJECT
 
-      - name: Create ARO Cluster
+      - name: Create OpenShift Project
         if: ${{ github.event.inputs.operation == 'create' }}
+        env:
+          PROJECT_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
         run: |
-          az aro create \
-            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
-            --location ${{ github.event.inputs.region || 'eastus' }} \
-            --master-vm-size ${{ github.event.inputs.node_size || 'Standard_D8s_v3' }} \
-            --worker-vm-size ${{ github.event.inputs.node_size || 'Standard_D4s_v3' }} \
-            --worker-count ${{ github.event.inputs.node_count || '3' }} \
-            --api-server-visibility Public \
-            --ingress-visibility Public
+          oc new-project $PROJECT_NAME --display-name="$PROJECT_NAME" --description="Multi-cloud cluster project"
 
-      - name: Update (Scale) ARO Cluster
+      - name: Deploy OpenShift Resources
+        if: ${{ github.event.inputs.operation == 'create' }}
+        env:
+          PROJECT_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
+          NODE_COUNT: ${{ github.event.inputs.node_count || '3' }}
+        run: |
+          # Create deployment config for scaling
+          cat <<EOF | oc apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: multicloud-deployment
+            namespace: $PROJECT_NAME
+          spec:
+            replicas: $NODE_COUNT
+            selector:
+              matchLabels:
+                app: multicloud-app
+            template:
+              metadata:
+                labels:
+                  app: multicloud-app
+              spec:
+                containers:
+                - name: multicloud-container
+                  image: nginx:latest
+                  ports:
+                  - containerPort: 80
+          EOF
+
+      - name: Scale OpenShift Deployment
         if: ${{ github.event.inputs.operation == 'update' }}
+        env:
+          PROJECT_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
+          NODE_COUNT: ${{ github.event.inputs.node_count || '3' }}
         run: |
-          az aro update \
-            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
-            --worker-count ${{ github.event.inputs.node_count || '3' }}
+          oc scale deployment multicloud-deployment --replicas=$NODE_COUNT -n $PROJECT_NAME
 
-      - name: Delete ARO Cluster
+      - name: Delete OpenShift Project
         if: ${{ github.event.inputs.operation == 'delete' }}
+        env:
+          PROJECT_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
         run: |
-          az aro delete \
-            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
-            --yes
+          oc delete project $PROJECT_NAME
 
-      - name: Get ARO Credentials
+      - name: Get OpenShift Cluster Info
         if: ${{ github.event.inputs.operation == 'create' || github.event.inputs.operation == 'update' }}
         run: |
-          # ARO does not use kubeconfig in the same way as AKS/EKS/GKE. Output API server and credentials info.
-          az aro show \
-            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
-            --query '{apiServer:apiserverProfile.url,console:consoleProfile.url,username:clusterProfile.username,password:clusterProfile.password}'
+          oc cluster-info
+          oc get nodes
+          oc get projects
 
-      - name: Verify ARO Cluster
+      - name: Verify OpenShift Cluster
         if: ${{ github.event.inputs.operation == 'create' || github.event.inputs.operation == 'update' }}
+        env:
+          PROJECT_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
         run: |
-          az aro show \
-            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
+          oc get pods -n $PROJECT_NAME
+          oc get services -n $PROJECT_NAME
+          oc get routes -n $PROJECT_NAME
 
   # Summary and Notifications
   summary:
-    needs: [aks-management, eks-management, gke-management, aro-management]
+    needs: [aks-management, eks-management, gke-management, openshift-management]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -313,4 +344,4 @@ jobs:
           echo "- AKS Management: ${{ needs.aks-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
           echo "- EKS Management: ${{ needs.eks-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
           echo "- GKE Management: ${{ needs.gke-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- ARO Management: ${{ needs.aro-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY 
+          echo "- OpenShift Management: ${{ needs.openshift-management.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY 

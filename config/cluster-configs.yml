@@ -95,41 +95,56 @@ gke:
     enable_workload_identity: true
     enable_network_policy: true
 
-# Azure Red Hat OpenShift (ARO) Configurations
-aro:
+# On-Premises OpenShift Configurations
+openshift:
   development:
-    worker_count: 2
-    master_vm_size: Standard_D8s_v3
-    worker_vm_size: Standard_D4s_v3
-    region: eastus
-    api_server_visibility: Public
-    ingress_visibility: Public
+    project_name: "dev-multicloud"
+    deployment_replicas: 2
+    resource_limits:
+      cpu: "500m"
+      memory: "512Mi"
+    resource_requests:
+      cpu: "250m"
+      memory: "256Mi"
     enable_auto_scaling: false
-    min_workers: 1
-    max_workers: 5
+    min_replicas: 1
+    max_replicas: 5
+    route_enabled: true
+    service_type: ClusterIP
     
   staging:
-    worker_count: 3
-    master_vm_size: Standard_D8s_v3
-    worker_vm_size: Standard_D8s_v3
-    region: eastus
-    api_server_visibility: Public
-    ingress_visibility: Public
+    project_name: "staging-multicloud"
+    deployment_replicas: 3
+    resource_limits:
+      cpu: "1000m"
+      memory: "1Gi"
+    resource_requests:
+      cpu: "500m"
+      memory: "512Mi"
     enable_auto_scaling: true
-    min_workers: 2
-    max_workers: 8
+    min_replicas: 2
+    max_replicas: 8
+    route_enabled: true
+    service_type: ClusterIP
+    enable_monitoring: true
     
   production:
-    worker_count: 5
-    master_vm_size: Standard_D16s_v3
-    worker_vm_size: Standard_D16s_v3
-    region: eastus
-    api_server_visibility: Public
-    ingress_visibility: Public
+    project_name: "prod-multicloud"
+    deployment_replicas: 5
+    resource_limits:
+      cpu: "2000m"
+      memory: "2Gi"
+    resource_requests:
+      cpu: "1000m"
+      memory: "1Gi"
     enable_auto_scaling: true
-    min_workers: 3
-    max_workers: 15
-    enable_encryption_at_host: true
+    min_replicas: 3
+    max_replicas: 15
+    route_enabled: true
+    service_type: LoadBalancer
+    enable_monitoring: true
+    enable_security_context: true
+    enable_network_policy: true
 
 # Common configurations across all platforms
 common:

@@ -11,7 +11,7 @@ on:
           - aks
           - eks
           - gke
-          - aro
+          - openshift
           - all
       cluster_name:
         description: 'Name of the cluster'
@@ -127,42 +127,49 @@ jobs:
           kubectl version --short
           kubectl get nodes -o wide
 
-  aro-upgrade:
-    if: ${{ github.event.inputs.cloud_platform == 'aro' || github.event.inputs.cloud_platform == 'all' }}
+  openshift-upgrade:
+    if: ${{ github.event.inputs.cloud_platform == 'openshift' || github.event.inputs.cloud_platform == 'all' }}
     runs-on: ubuntu-latest
-    environment: azure
+    environment: openshift
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Upgrade ARO Kubernetes Version
+      - name: Setup OpenShift CLI
         run: |
-          az aro update \
-            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
-            --version ${{ github.event.inputs.target_version }}
+          # Install OpenShift CLI
+          curl -L https://mirror.openshift.com/pub/openshift-v4/clients/oc/latest/linux/oc.tar.gz | tar xz
+          sudo mv oc /usr/local/bin/
+          oc version
 
-      - name: Get ARO Credentials
+      - name: Configure OpenShift Access
+        env:
+          OPENSHIFT_SERVER: ${{ secrets.OPENSHIFT_SERVER }}
+          OPENSHIFT_TOKEN: ${{ secrets.OPENSHIFT_TOKEN }}
         run: |
-          az aro show \
-            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
-            --query '{apiServer:apiserverProfile.url,console:consoleProfile.url,version:clusterProfile.version}'
+          oc login --token=$OPENSHIFT_TOKEN --server=$OPENSHIFT_SERVER
 
-      - name: Verify ARO Cluster Version
+      - name: Check OpenShift Version
         run: |
-          az aro show \
-            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
-            --query '{name:name,version:clusterProfile.version,state:provisioningState}'
+          oc version
+          oc get clusterversion
+
+      - name: Upgrade OpenShift Cluster
+        run: |
+          # Note: OpenShift upgrades are typically managed through the web console or cluster admin
+          # This step shows current version and available upgrades
+          oc get clusterversion -o jsonpath='{.items[0].status.history[0].version}'
+          echo "Current OpenShift version retrieved"
+          echo "For OpenShift upgrades, please use the web console or cluster admin tools"
+
+      - name: Verify OpenShift Cluster
+        run: |
+          oc cluster-info
+          oc get nodes
+          oc get clusterversion
 
   summary:
-    needs: [aks-upgrade, eks-upgrade, gke-upgrade, aro-upgrade]
+    needs: [aks-upgrade, eks-upgrade, gke-upgrade, openshift-upgrade]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -178,4 +185,4 @@ jobs:
           echo "- AKS Upgrade: ${{ needs.aks-upgrade.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
           echo "- EKS Upgrade: ${{ needs.eks-upgrade.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
           echo "- GKE Upgrade: ${{ needs.gke-upgrade.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- ARO Upgrade: ${{ needs.aro-upgrade.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY 
+          echo "- OpenShift Upgrade: ${{ needs.openshift-upgrade.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY 

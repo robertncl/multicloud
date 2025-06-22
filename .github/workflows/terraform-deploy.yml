@@ -30,7 +30,7 @@ on:
           - aks
           - eks
           - gke
-          - aro
+          - openshift
           - all
       cluster_name:
         description: 'Name of the cluster'
@@ -258,12 +258,12 @@ jobs:
             -var="google_project_id=${{ secrets.GCP_PROJECT_ID }}" \
             -auto-approve
 
-  # Azure Red Hat OpenShift (ARO) Terraform Operations
-  terraform-aro:
-    if: ${{ github.event.inputs.cloud_platforms == 'aro' || github.event.inputs.cloud_platforms == 'all' }}
+  # On-Premises OpenShift Terraform Operations
+  terraform-openshift:
+    if: ${{ github.event.inputs.cloud_platforms == 'openshift' || github.event.inputs.cloud_platforms == 'all' }}
     needs: terraform-setup
     runs-on: ubuntu-latest
-    environment: azure
+    environment: openshift
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -273,55 +273,67 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Setup OpenShift CLI
+        run: |
+          # Install OpenShift CLI
+          curl -L https://mirror.openshift.com/pub/openshift-v4/clients/oc/latest/linux/oc.tar.gz | tar xz
+          sudo mv oc /usr/local/bin/
+          oc version
 
-      - name: Terraform Init - ARO
+      - name: Configure OpenShift Access
+        env:
+          OPENSHIFT_SERVER: ${{ secrets.OPENSHIFT_SERVER }}
+          OPENSHIFT_TOKEN: ${{ secrets.OPENSHIFT_TOKEN }}
+        run: |
+          oc login --token=$OPENSHIFT_TOKEN --server=$OPENSHIFT_SERVER
+
+      - name: Terraform Init - OpenShift
         working-directory: ./terraform
         run: |
           terraform init \
-            -backend-config="key=aro/${{ env.CLUSTER_NAME }}/terraform.tfstate" \
+            -backend-config="key=openshift/${{ env.CLUSTER_NAME }}/terraform.tfstate" \
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
             -backend-config="region=${{ secrets.TF_STATE_REGION }}"
 
-      - name: Terraform Plan - ARO
+      - name: Terraform Plan - OpenShift
         if: ${{ github.event.inputs.operation == 'plan' }}
         working-directory: ./terraform
         run: |
           terraform plan \
-            -var="cluster_name=${{ env.CLUSTER_NAME }}-aro" \
+            -var="cluster_name=${{ env.CLUSTER_NAME }}-openshift" \
             -var="environment=${{ env.ENVIRONMENT }}" \
             -var="node_count=${{ env.NODE_COUNT }}" \
-            -var="platform=aro" \
-            -out=aro-plan.tfplan
+            -var="platform=openshift" \
+            -var="openshift_server=${{ secrets.OPENSHIFT_SERVER }}" \
+            -out=openshift-plan.tfplan
 
-      - name: Terraform Apply - ARO
+      - name: Terraform Apply - OpenShift
         if: ${{ github.event.inputs.operation == 'apply' }}
         working-directory: ./terraform
         run: |
           terraform apply \
-            -var="cluster_name=${{ env.CLUSTER_NAME }}-aro" \
+            -var="cluster_name=${{ env.CLUSTER_NAME }}-openshift" \
             -var="environment=${{ env.ENVIRONMENT }}" \
             -var="node_count=${{ env.NODE_COUNT }}" \
-            -var="platform=aro" \
+            -var="platform=openshift" \
+            -var="openshift_server=${{ secrets.OPENSHIFT_SERVER }}" \
             -auto-approve
 
-      - name: Terraform Destroy - ARO
+      - name: Terraform Destroy - OpenShift
         if: ${{ github.event.inputs.operation == 'destroy' }}
         working-directory: ./terraform
         run: |
           terraform destroy \
-            -var="cluster_name=${{ env.CLUSTER_NAME }}-aro" \
+            -var="cluster_name=${{ env.CLUSTER_NAME }}-openshift" \
             -var="environment=${{ env.ENVIRONMENT }}" \
             -var="node_count=${{ env.NODE_COUNT }}" \
-            -var="platform=aro" \
+            -var="platform=openshift" \
+            -var="openshift_server=${{ secrets.OPENSHIFT_SERVER }}" \
             -auto-approve
 
   # Summary and Notifications
   summary:
-    needs: [terraform-aks, terraform-eks, terraform-gke, terraform-aro]
+    needs: [terraform-aks, terraform-eks, terraform-gke, terraform-openshift]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -338,7 +350,7 @@ jobs:
           echo "- AKS Terraform: ${{ needs.terraform-aks.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
           echo "- EKS Terraform: ${{ needs.terraform-eks.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
           echo "- GKE Terraform: ${{ needs.terraform-gke.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- ARO Terraform: ${{ needs.terraform-aro.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- OpenShift Terraform: ${{ needs.terraform-openshift.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
           if [ "${{ github.event.inputs.operation }}" = "apply" ]; then

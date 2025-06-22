@@ -1,20 +1,21 @@
 # Multi-Cloud Kubernetes Cluster Management Setup Guide
 
-This guide explains how to set up and configure the GitHub Actions workflow for managing Kubernetes clusters across multiple cloud platforms (AKS, EKS, GKE).
+This guide explains how to set up and configure the GitHub Actions workflow for managing Kubernetes clusters across multiple cloud platforms (AKS, EKS, GKE, OpenShift).
 
 ## Prerequisites
 
 Before using this workflow, ensure you have:
 
 1. **GitHub Repository**: A GitHub repository with Actions enabled
-2. **Cloud Platform Accounts**: Active accounts on Azure, AWS, Google Cloud, and/or Azure Red Hat OpenShift (ARO)
-3. **Required Permissions**: Appropriate permissions to create/manage Kubernetes clusters (including ARO)
+2. **Cloud Platform Accounts**: Active accounts on Azure, AWS, and/or Google Cloud
+3. **On-Premises OpenShift Cluster**: Access to an OpenShift cluster with API access
+4. **Required Permissions**: Appropriate permissions to create/manage Kubernetes clusters
 
 ## Required GitHub Secrets
 
 You need to configure the following secrets in your GitHub repository:
 
-### Azure (AKS/ARO) Secrets
+### Azure (AKS) Secrets
 - `AZURE_CREDENTIALS`: Service principal credentials in JSON format
 - `AZURE_RESOURCE_GROUP`: Name of the Azure resource group
 
@@ -24,6 +25,11 @@ You need to configure the following secrets in your GitHub repository:
 
 ### Google Cloud (GKE) Secrets
 - `GCP_SA_KEY`: Service account key in JSON format
+
+### On-Premises OpenShift Secrets
+- `OPENSHIFT_SERVER`: OpenShift cluster server URL (e.g., https://api.openshift.example.com:6443)
+- `OPENSHIFT_TOKEN`: OpenShift authentication token
+- `OPENSHIFT_PROJECT`: Default project name for operations
 
 ## Setting Up Cloud Credentials
 
@@ -75,12 +81,25 @@ gcloud projects add-iam-policy-binding PROJECT_ID \
 
 3. Download the key and add it as `GCP_SA_KEY` secret
 
+### On-Premises OpenShift Setup
+1. Access your OpenShift cluster and generate a token:
+```bash
+oc login --username=<your-username> --password=<your-password> --server=<your-server>
+oc whoami --show-token
+```
+
+2. Add the server URL and token as secrets:
+   - `OPENSHIFT_SERVER`: Your OpenShift API server URL
+   - `OPENSHIFT_TOKEN`: The token from the previous step
+   - `OPENSHIFT_PROJECT`: Default project name (e.g., "default")
+
 ## GitHub Environments
 
 Create the following environments in your repository:
 - `azure`
 - `aws` 
 - `gcp`
+- `openshift`
 
 Each environment can have additional protection rules and secrets if needed.
 
@@ -92,11 +111,11 @@ Each environment can have additional protection rules and secrets if needed.
 3. Click "Run workflow"
 4. Fill in the required parameters:
    - **Operation**: create, update, or delete
-   - **Cloud Platform**: aks, eks, gke, aro, or all
-   - **Cluster Name**: Name for your cluster
-   - **Region**: Cloud region
-   - **Node Count**: Number of nodes
-   - **Node Size**: VM/instance type
+   - **Cloud Platform**: aks, eks, gke, openshift, or all
+   - **Cluster Name**: Name for your cluster/project
+   - **Region**: Cloud region (not applicable for OpenShift)
+   - **Node Count**: Number of nodes/replicas
+   - **Node Size**: VM/instance type (not applicable for OpenShift)
 
 ### Example Usage
 
@@ -108,6 +127,12 @@ Each environment can have additional protection rules and secrets if needed.
 - Node Count: `2`
 - Node Size: `Standard_DS2_v2`
 
+#### Create an OpenShift project:
+- Operation: `create`
+- Cloud Platform: `openshift`
+- Cluster Name: `openshift-project`
+- Node Count: `3`
+
 #### Update production cluster on EKS only:
 - Operation: `update`
 - Cloud Platform: `eks`
@@ -118,14 +143,6 @@ Each environment can have additional protection rules and secrets if needed.
 - Operation: `delete`
 - Cloud Platform: `gke`
 - Cluster Name: `staging-cluster`
-
-#### Create an ARO cluster:
-- Operation: `create`
-- Cloud Platform: `aro`
-- Cluster Name: `aro-cluster`
-- Region: `eastus`
-- Node Count: `3`
-- Node Size: `Standard_D4s_v3`
 
 ## Configuration Files
 
@@ -143,14 +160,15 @@ After cluster creation/update, the workflow will:
 
 ### Common Issues
 
-1. **Authentication Errors**: Verify your cloud credentials are correct and have sufficient permissions (including for ARO)
+1. **Authentication Errors**: Verify your cloud credentials are correct and have sufficient permissions
 2. **Resource Quotas**: Check if you have sufficient quota in your cloud accounts
 3. **Region Availability**: Ensure the selected region supports the requested VM types
 4. **Network Issues**: Verify network connectivity and firewall rules
+5. **OpenShift Access**: Ensure OpenShift server URL and token are correct
 
 ### Logs and Debugging
 
-- Check the workflow logs in the Actions tab
+- Check the workflow logs in GitHub Actions
 - Review the summary step for operation results
 - Verify cluster status using cloud console or CLI tools
 

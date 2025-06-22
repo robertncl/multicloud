@@ -135,6 +135,29 @@ get_aro_credentials() {
     fi
 }
 
+# Get cluster credentials for OpenShift
+get_openshift_credentials() {
+    local cluster_name="${CLUSTER_NAME}-openshift"
+    local openshift_server="${OPENSHIFT_SERVER}"
+    local openshift_token="${OPENSHIFT_TOKEN}"
+    
+    if [ -z "$openshift_server" ] || [ -z "$openshift_token" ]; then
+        log_error "OPENSHIFT_SERVER and OPENSHIFT_TOKEN environment variables are required"
+        return 1
+    fi
+    
+    log_info "Getting OpenShift cluster information..."
+    
+    if oc login --token="$openshift_token" --server="$openshift_server" 2>/dev/null; then
+        log_success "OpenShift cluster access configured successfully"
+        oc cluster-info
+        oc get projects
+    else
+        log_error "Failed to access OpenShift cluster"
+        return 1
+    fi
+}
+
 # Verify cluster health
 verify_cluster() {
     local platform="$1"
@@ -233,6 +256,25 @@ get_all_cluster_status() {
             log_warning "ARO cluster not found or not accessible"
         fi
     fi
+    
+    # OpenShift
+    if command -v oc &> /dev/null; then
+        local openshift_server="${OPENSHIFT_SERVER}"
+        local openshift_token="${OPENSHIFT_TOKEN}"
+        
+        if [ -n "$openshift_server" ] && [ -n "$openshift_token" ]; then
+            log_info "Checking OpenShift cluster status..."
+            if oc login --token="$openshift_token" --server="$openshift_server" --insecure-skip-tls-verify=true 2>/dev/null; then
+                log_success "OpenShift cluster is accessible"
+                oc cluster-info
+                oc get projects
+            else
+                log_warning "OpenShift cluster not found or not accessible"
+            fi
+        else
+            log_warning "OPENSHIFT_SERVER or OPENSHIFT_TOKEN not set, skipping OpenShift check"
+        fi
+    fi
 }
 
 # Scale cluster nodes
@@ -282,14 +324,13 @@ scale_cluster() {
                 return 1
             fi
             ;;
-        "aro")
-            local resource_group="${AZURE_RESOURCE_GROUP:-${CLUSTER_NAME}-aro-rg}"
-            local cluster_name="${CLUSTER_NAME}-aro"
+        "openshift")
+            local project_name="${OPENSHIFT_PROJECT:-${CLUSTER_NAME}-openshift}"
             
-            if az aro update --resource-group "$resource_group" --name "$cluster_name" --worker-count "$node_count"; then
-                log_success "ARO cluster scaled successfully"
+            if oc scale deployment multicloud-deployment --replicas="$node_count" -n "$project_name" 2>/dev/null; then
+                log_success "OpenShift deployment scaled successfully"
             else
-                log_error "Failed to scale ARO cluster"
+                log_error "Failed to scale OpenShift deployment"
                 return 1
             fi
             ;;
@@ -309,7 +350,7 @@ Usage: $0 [COMMAND] [OPTIONS]
 
 Commands:
     check-prerequisites    Check if required tools are installed
-    get-credentials [PLATFORM]  Get cluster credentials for specified platform (aks|eks|gke|aro|all)
+    get-credentials [PLATFORM]  Get cluster credentials for specified platform (aks|eks|gke|openshift|all)
     verify-cluster [PLATFORM]   Verify cluster health for specified platform
     get-status              Get status of all clusters
     scale [PLATFORM] [COUNT]    Scale cluster to specified node count
@@ -324,13 +365,16 @@ Environment Variables:
     AWS_REGION            AWS region
     GCP_PROJECT_ID        Google Cloud project ID
     GCP_ZONE              Google Cloud zone
+    OPENSHIFT_SERVER      OpenShift cluster server URL
+    OPENSHIFT_TOKEN       OpenShift authentication token
+    OPENSHIFT_PROJECT     OpenShift project name
 
 Examples:
     $0 check-prerequisites
     $0 get-credentials all
     $0 verify-cluster aks
     $0 scale eks 5
-    $0 scale aro 3
+    $0 scale openshift 3
     $0 get-status
 
 EOF
@@ -353,17 +397,17 @@ main() {
                 "gke")
                     get_gke_credentials
                     ;;
-                "aro")
-                    get_aro_credentials
+                "openshift")
+                    get_openshift_credentials
                     ;;
                 "all")
                     get_aks_credentials || true
                     get_eks_credentials || true
                     get_gke_credentials || true
-                    get_aro_credentials || true
+                    get_openshift_credentials || true
                     ;;
                 *)
-                    log_error "Please specify platform: aks, eks, gke, aro, or all"
+                    log_error "Please specify platform: aks, eks, gke, openshift, or all"
                     exit 1
                     ;;
             esac
@@ -382,12 +426,14 @@ main() {
                     get_gke_credentials
                     verify_cluster "GKE" "${CLUSTER_NAME}-gke"
                     ;;
-                "aro")
-                    get_aro_credentials
-                    log_info "ARO verification: Use the API server URL and credentials from get-credentials to access the cluster"
+                "openshift")
+                    get_openshift_credentials
+                    log_info "OpenShift verification: Use oc commands to verify cluster health"
+                    oc get nodes
+                    oc get projects
                     ;;
                 *)
-                    log_error "Please specify platform: aks, eks, gke, or aro"
+                    log_error "Please specify platform: aks, eks, gke, or openshift"
                     exit 1
                     ;;
             esac

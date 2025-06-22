@@ -1,10 +1,10 @@
 # Multi-Cloud Kubernetes Cluster Management
 
-A comprehensive solution for managing Kubernetes clusters across multiple cloud platforms (AKS, EKS, GKE, ARO) using GitHub Actions and Terraform.
+A comprehensive solution for managing Kubernetes clusters across multiple cloud platforms (AKS, EKS, GKE, OpenShift) using GitHub Actions and Terraform.
 
 ## 🚀 Features
 
-- **Multi-Cloud Support**: Manage Kubernetes clusters on Azure (AKS), AWS (EKS), Google Cloud (GKE), and Azure Red Hat OpenShift (ARO)
+- **Multi-Cloud Support**: Manage Kubernetes clusters on Azure (AKS), AWS (EKS), Google Cloud (GKE), and On-Premises OpenShift
 - **GitHub Actions Workflows**: Automated cluster operations with manual triggers
 - **Terraform Infrastructure as Code**: Declarative infrastructure management
 - **Environment-Based Configurations**: Predefined configurations for development, staging, and production
@@ -37,12 +37,13 @@ multicloud/
 ### 1. Prerequisites
 
 - GitHub repository with Actions enabled
-- Cloud platform accounts (Azure, AWS, Google Cloud, Azure Red Hat OpenShift)
+- Cloud platform accounts (Azure, AWS, Google Cloud)
+- On-premises OpenShift cluster with API access
 - Appropriate permissions for Kubernetes cluster management
 
 ### 2. Setup Cloud Credentials
 
-#### Azure (AKS/ARO)
+#### Azure (AKS)
 ```bash
 az ad sp create-for-rbac --name "github-actions" --role contributor \
     --scopes /subscriptions/{subscription-id}/resourceGroups/{resource-group} \
@@ -55,11 +56,17 @@ Create IAM user with EKS permissions and generate access keys.
 #### Google Cloud (GKE)
 Create service account with GKE permissions and download the key.
 
+#### On-Premises OpenShift
+Generate an authentication token from your OpenShift cluster:
+```bash
+oc login --token=<your-token> --server=<your-server>
+```
+
 ### 3. Configure GitHub Secrets
 
 Add the following secrets to your repository:
 
-**Azure (AKS/ARO):**
+**Azure (AKS):**
 - `AZURE_CREDENTIALS`: Service principal credentials (JSON)
 - `AZURE_RESOURCE_GROUP`: Resource group name
 
@@ -72,6 +79,11 @@ Add the following secrets to your repository:
 - `GCP_SA_KEY`: Service account key (JSON)
 - `GCP_PROJECT_ID`: Project ID
 
+**On-Premises OpenShift:**
+- `OPENSHIFT_SERVER`: OpenShift cluster server URL
+- `OPENSHIFT_TOKEN`: OpenShift authentication token
+- `OPENSHIFT_PROJECT`: Default project name
+
 **Terraform (Optional):**
 - `TF_API_TOKEN`: Terraform Cloud API token
 - `TF_STATE_BUCKET`: S3 bucket for Terraform state
@@ -83,6 +95,7 @@ Create environments in your repository:
 - `azure`
 - `aws`
 - `gcp`
+- `openshift`
 
 ## 🎯 Usage
 
@@ -94,18 +107,18 @@ Create environments in your repository:
 3. Click **Run workflow**
 4. Configure parameters:
    - **Operation**: create, update, delete
-   - **Cloud Platform**: aks, eks, gke, aro, all
-   - **Cluster Name**: Name for your cluster
-   - **Region**: Cloud region
-   - **Node Count**: Number of nodes
-   - **Node Size**: VM/instance type
+   - **Cloud Platform**: aks, eks, gke, openshift, all
+   - **Cluster Name**: Name for your cluster/project
+   - **Region**: Cloud region (not applicable for OpenShift)
+   - **Node Count**: Number of nodes/replicas
+   - **Node Size**: VM/instance type (not applicable for OpenShift)
 
 #### 2. Version Upgrades
 1. Go to **Actions** tab in your repository
 2. Select **Kubernetes Version Upgrade**
 3. Click **Run workflow**
 4. Configure parameters:
-   - **Cloud Platform**: aks, eks, gke, aro, all
+   - **Cloud Platform**: aks, eks, gke, openshift, all
    - **Cluster Name**: Name for your cluster
    - **Target Version**: Kubernetes version to upgrade to
    - **Region**: Cloud region
@@ -117,7 +130,7 @@ Create environments in your repository:
 4. Configure parameters:
    - **Operation**: plan, apply, destroy
    - **Environment**: development, staging, production
-   - **Cloud Platforms**: aks, eks, gke, aro, all
+   - **Cloud Platforms**: aks, eks, gke, openshift, all
    - **Cluster Name**: Name for your cluster
    - **Node Count**: Number of nodes
 
@@ -126,21 +139,19 @@ Create environments in your repository:
 ### Create Development Clusters on All Platforms
 ```yaml
 Operation: create
-Cloud Platform: all (includes aro)
+Cloud Platform: all (includes openshift)
 Cluster Name: dev-cluster
 Region: us-east-1
 Node Count: 2
 Node Size: Standard_DS2_v2
 ```
 
-### Create an ARO Cluster
+### Create an OpenShift Project
 ```yaml
 Operation: create
-Cloud Platform: aro
-Cluster Name: aro-cluster
-Region: eastus
+Cloud Platform: openshift
+Cluster Name: openshift-project
 Node Count: 3
-Node Size: Standard_D4s_v3
 ```
 
 ### Upgrade Kubernetes Version
@@ -175,7 +186,7 @@ The `config/cluster-configs.yml` file contains predefined configurations:
 - **Development**: 2 nodes, smaller instance types
 - **Staging**: 3 nodes, medium instance types
 - **Production**: 5+ nodes, larger instance types with additional features
-- **ARO**: Uses Azure CLI with master/worker VM configurations
+- **OpenShift**: Project-based configurations with deployment replicas and resource limits
 
 ### Platform-Specific Features
 
@@ -194,15 +205,17 @@ The `config/cluster-configs.yml` file contains predefined configurations:
 - Network Policy
 - Auto-repair and auto-upgrade
 
-#### ARO (Azure Red Hat OpenShift)
-- Master and worker node configurations
-- Public/private API server visibility
+#### OpenShift (On-Premises)
+- Project-based resource management
+- Deployment scaling and resource limits
+- Route and service management
 - OpenShift-specific features and tooling
 
 ### Customization
 
 You can customize:
-- Node counts and types
+- Node counts and types (for cloud platforms)
+- Deployment replicas and resource limits (for OpenShift)
 - Regions and availability zones
 - Auto-scaling parameters
 - Security features
@@ -220,9 +233,9 @@ You can customize:
 
 ### Required Permissions
 
-**Azure (AKS/ARO):**
+**Azure (AKS):**
 - Contributor role on resource group
-- AKS/ARO cluster management permissions
+- AKS cluster management permissions
 
 **AWS (EKS):**
 - EKS cluster management
@@ -232,6 +245,10 @@ You can customize:
 **Google Cloud (GKE):**
 - Container Admin role
 - Compute Engine permissions
+
+**On-Premises OpenShift:**
+- Cluster admin or project admin permissions
+- API access with appropriate token
 
 ## 💰 Cost Optimization
 
@@ -253,10 +270,11 @@ You can customize:
 
 ### Common Issues
 
-1. **Authentication Errors**: Verify your cloud credentials are correct and have sufficient permissions (including for ARO)
+1. **Authentication Errors**: Verify your cloud credentials are correct and have sufficient permissions
 2. **Resource Quotas**: Check if you have sufficient quota in your cloud accounts
 3. **Region Availability**: Ensure the selected region supports the requested VM types
 4. **Network Issues**: Verify network connectivity and firewall rules
+5. **OpenShift Access**: Ensure OpenShift server URL and token are correct
 
 ### Getting Help
 
@@ -283,7 +301,7 @@ Use the provided utility script for local cluster management:
 
 # Scale cluster
 ./scripts/cluster-utils.sh scale eks 5
-./scripts/cluster-utils.sh scale aro 3
+./scripts/cluster-utils.sh scale openshift 3
 
 # Get status of all clusters
 ./scripts/cluster-utils.sh get-status
