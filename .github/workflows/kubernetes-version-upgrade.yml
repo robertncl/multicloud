@@ -1,0 +1,145 @@
+name: Kubernetes Version Upgrade
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud_platform:
+        description: 'Cloud platform to upgrade'
+        required: true
+        type: choice
+        options:
+          - aks
+          - eks
+          - gke
+          - all
+      cluster_name:
+        description: 'Name of the cluster'
+        required: false
+        type: string
+        default: 'multicloud-cluster'
+      target_version:
+        description: 'Target Kubernetes version'
+        required: true
+        type: string
+        default: '1.28.0'
+      region:
+        description: 'Region for the cluster'
+        required: false
+        type: string
+        default: 'us-east-1'
+
+jobs:
+  aks-upgrade:
+    if: ${{ github.event.inputs.cloud_platform == 'aks' || github.event.inputs.cloud_platform == 'all' }}
+    runs-on: ubuntu-latest
+    environment: azure
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Upgrade AKS Kubernetes Version
+        run: |
+          az aks upgrade \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
+            --kubernetes-version ${{ github.event.inputs.target_version }} \
+            --yes
+
+      - name: Get AKS Credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
+            --overwrite-existing
+
+      - name: Verify AKS Cluster Version
+        run: |
+          kubectl version --short
+          kubectl get nodes -o wide
+
+  eks-upgrade:
+    if: ${{ github.event.inputs.cloud_platform == 'eks' || github.event.inputs.cloud_platform == 'all' }}
+    runs-on: ubuntu-latest
+    environment: aws
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ github.event.inputs.region || 'us-east-1' }}
+
+      - name: Upgrade EKS Kubernetes Version
+        run: |
+          aws eks update-cluster-version \
+            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}-eks \
+            --kubernetes-version ${{ github.event.inputs.target_version }} \
+            --region ${{ github.event.inputs.region || 'us-east-1' }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}-eks --region ${{ github.event.inputs.region || 'us-east-1' }}
+
+      - name: Verify EKS Cluster Version
+        run: |
+          kubectl version --short
+          kubectl get nodes -o wide
+
+  gke-upgrade:
+    if: ${{ github.event.inputs.cloud_platform == 'gke' || github.event.inputs.cloud_platform == 'all' }}
+    runs-on: ubuntu-latest
+    environment: gcp
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Google Auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upgrade GKE Kubernetes Version
+        run: |
+          gcloud container clusters upgrade ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}-gke \
+            --master \
+            --cluster-version ${{ github.event.inputs.target_version }} \
+            --zone ${{ github.event.inputs.region || 'us-east1' }}-a
+
+      - name: Get GKE Credentials
+        run: |
+          gcloud container clusters get-credentials ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}-gke \
+            --zone ${{ github.event.inputs.region || 'us-east1' }}-a
+
+      - name: Verify GKE Cluster Version
+        run: |
+          kubectl version --short
+          kubectl get nodes -o wide
+
+  summary:
+    needs: [aks-upgrade, eks-upgrade, gke-upgrade]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Kubernetes Version Upgrade Summary
+        run: |
+          echo "## Kubernetes Version Upgrade Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**Target Version:** ${{ github.event.inputs.target_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Target Platforms:** ${{ github.event.inputs.cloud_platform }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster Name:** ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ github.event.inputs.region || 'us-east-1' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Results:" >> $GITHUB_STEP_SUMMARY
+          echo "- AKS Upgrade: ${{ needs.aks-upgrade.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- EKS Upgrade: ${{ needs.eks-upgrade.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- GKE Upgrade: ${{ needs.gke-upgrade.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY 
