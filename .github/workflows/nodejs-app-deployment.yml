@@ -1,0 +1,403 @@
+name: Node.js App Multi-Cloud Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud_platform:
+        description: 'Cloud platform to deploy to'
+        required: true
+        type: choice
+        options:
+          - aks
+          - eks
+          - gke
+          - openshift
+          - all
+      cluster_name:
+        description: 'Name of the cluster'
+        required: false
+        type: string
+        default: 'multicloud-cluster'
+      app_version:
+        description: 'Application version to deploy'
+        required: false
+        type: string
+        default: 'v1.0.0'
+      environment:
+        description: 'Deployment environment'
+        required: false
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+        default: 'development'
+      region:
+        description: 'Region for the cluster'
+        required: false
+        type: string
+        default: 'us-east-1'
+      replicas:
+        description: 'Number of replicas to deploy'
+        required: false
+        type: string
+        default: '3'
+      enable_ingress:
+        description: 'Enable ingress for external access'
+        required: false
+        type: boolean
+        default: true
+      enable_hpa:
+        description: 'Enable horizontal pod autoscaling'
+        required: false
+        type: boolean
+        default: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: multicloud-nodejs-app
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ github.event.inputs.app_version }},enable={{is_default}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/nodejs-app
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  aks-deploy:
+    needs: build-and-push
+    if: ${{ github.event.inputs.cloud_platform == 'aks' || github.event.inputs.cloud_platform == 'all' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS Credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }} \
+            --overwrite-existing
+
+      - name: Create namespace
+        run: |
+          kubectl create namespace nodejs-app --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy Node.js App to AKS
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image-tag }}
+          CLOUD_PLATFORM: "aks"
+          CLUSTER_REGION: ${{ github.event.inputs.region || 'us-east-1' }}
+          CLUSTER_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
+          REPLICAS: ${{ github.event.inputs.replicas || '3' }}
+          INGRESS_HOST: "nodejs-app.${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}.aks.local"
+        run: |
+          # Update deployment with environment variables
+          sed -i "s|\${REGISTRY}|$REGISTRY|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${IMAGE_TAG}|$IMAGE_TAG|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${CLOUD_PLATFORM}|$CLOUD_PLATFORM|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${CLUSTER_REGION}|$CLUSTER_REGION|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${CLUSTER_NAME}|$CLUSTER_NAME|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|replicas: 3|replicas: $REPLICAS|g" k8s/nodejs-app/deployment.yaml
+          
+          # Apply Kubernetes manifests
+          kubectl apply -f k8s/nodejs-app/deployment.yaml -n nodejs-app
+          kubectl apply -f k8s/nodejs-app/service.yaml -n nodejs-app
+          
+          # Apply ingress if enabled
+          if [ "${{ github.event.inputs.enable_ingress }}" = "true" ]; then
+            sed -i "s|\${INGRESS_HOST}|$INGRESS_HOST|g" k8s/nodejs-app/ingress.yaml
+            kubectl apply -f k8s/nodejs-app/ingress.yaml -n nodejs-app
+          fi
+          
+          # Apply HPA if enabled
+          if [ "${{ github.event.inputs.enable_hpa }}" = "true" ]; then
+            kubectl apply -f k8s/nodejs-app/hpa.yaml -n nodejs-app
+          fi
+
+      - name: Verify AKS Deployment
+        run: |
+          kubectl get pods -n nodejs-app
+          kubectl get services -n nodejs-app
+          kubectl get ingress -n nodejs-app || echo "Ingress not enabled"
+          kubectl get hpa -n nodejs-app || echo "HPA not enabled"
+
+  eks-deploy:
+    needs: build-and-push
+    if: ${{ github.event.inputs.cloud_platform == 'eks' || github.event.inputs.cloud_platform == 'all' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ github.event.inputs.region || 'us-east-1' }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}-eks --region ${{ github.event.inputs.region || 'us-east-1' }}
+
+      - name: Create namespace
+        run: |
+          kubectl create namespace nodejs-app --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy Node.js App to EKS
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image-tag }}
+          CLOUD_PLATFORM: "eks"
+          CLUSTER_REGION: ${{ github.event.inputs.region || 'us-east-1' }}
+          CLUSTER_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}-eks
+          REPLICAS: ${{ github.event.inputs.replicas || '3' }}
+          INGRESS_HOST: "nodejs-app.${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}.eks.local"
+        run: |
+          # Update deployment with environment variables
+          sed -i "s|\${REGISTRY}|$REGISTRY|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${IMAGE_TAG}|$IMAGE_TAG|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${CLOUD_PLATFORM}|$CLOUD_PLATFORM|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${CLUSTER_REGION}|$CLUSTER_REGION|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${CLUSTER_NAME}|$CLUSTER_NAME|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|replicas: 3|replicas: $REPLICAS|g" k8s/nodejs-app/deployment.yaml
+          
+          # Apply Kubernetes manifests
+          kubectl apply -f k8s/nodejs-app/deployment.yaml -n nodejs-app
+          kubectl apply -f k8s/nodejs-app/service.yaml -n nodejs-app
+          
+          # Apply ingress if enabled
+          if [ "${{ github.event.inputs.enable_ingress }}" = "true" ]; then
+            sed -i "s|\${INGRESS_HOST}|$INGRESS_HOST|g" k8s/nodejs-app/ingress.yaml
+            kubectl apply -f k8s/nodejs-app/ingress.yaml -n nodejs-app
+          fi
+          
+          # Apply HPA if enabled
+          if [ "${{ github.event.inputs.enable_hpa }}" = "true" ]; then
+            kubectl apply -f k8s/nodejs-app/hpa.yaml -n nodejs-app
+          fi
+
+      - name: Verify EKS Deployment
+        run: |
+          kubectl get pods -n nodejs-app
+          kubectl get services -n nodejs-app
+          kubectl get ingress -n nodejs-app || echo "Ingress not enabled"
+          kubectl get hpa -n nodejs-app || echo "HPA not enabled"
+
+  gke-deploy:
+    needs: build-and-push
+    if: ${{ github.event.inputs.cloud_platform == 'gke' || github.event.inputs.cloud_platform == 'all' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Google Auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Get GKE Credentials
+        run: |
+          gcloud container clusters get-credentials ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}-gke \
+            --zone ${{ github.event.inputs.region || 'us-east1' }}-a
+
+      - name: Create namespace
+        run: |
+          kubectl create namespace nodejs-app --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy Node.js App to GKE
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image-tag }}
+          CLOUD_PLATFORM: "gke"
+          CLUSTER_REGION: ${{ github.event.inputs.region || 'us-east1' }}
+          CLUSTER_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}-gke
+          REPLICAS: ${{ github.event.inputs.replicas || '3' }}
+          INGRESS_HOST: "nodejs-app.${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}.gke.local"
+        run: |
+          # Update deployment with environment variables
+          sed -i "s|\${REGISTRY}|$REGISTRY|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${IMAGE_TAG}|$IMAGE_TAG|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${CLOUD_PLATFORM}|$CLOUD_PLATFORM|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${CLUSTER_REGION}|$CLUSTER_REGION|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${CLUSTER_NAME}|$CLUSTER_NAME|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|replicas: 3|replicas: $REPLICAS|g" k8s/nodejs-app/deployment.yaml
+          
+          # Apply Kubernetes manifests
+          kubectl apply -f k8s/nodejs-app/deployment.yaml -n nodejs-app
+          kubectl apply -f k8s/nodejs-app/service.yaml -n nodejs-app
+          
+          # Apply ingress if enabled
+          if [ "${{ github.event.inputs.enable_ingress }}" = "true" ]; then
+            sed -i "s|\${INGRESS_HOST}|$INGRESS_HOST|g" k8s/nodejs-app/ingress.yaml
+            kubectl apply -f k8s/nodejs-app/ingress.yaml -n nodejs-app
+          fi
+          
+          # Apply HPA if enabled
+          if [ "${{ github.event.inputs.enable_hpa }}" = "true" ]; then
+            kubectl apply -f k8s/nodejs-app/hpa.yaml -n nodejs-app
+          fi
+
+      - name: Verify GKE Deployment
+        run: |
+          kubectl get pods -n nodejs-app
+          kubectl get services -n nodejs-app
+          kubectl get ingress -n nodejs-app || echo "Ingress not enabled"
+          kubectl get hpa -n nodejs-app || echo "HPA not enabled"
+
+  openshift-deploy:
+    needs: build-and-push
+    if: ${{ github.event.inputs.cloud_platform == 'openshift' || github.event.inputs.cloud_platform == 'all' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup OpenShift CLI
+        run: |
+          curl -L https://mirror.openshift.com/pub/openshift-v4/clients/oc/latest/linux/oc.tar.gz | tar xz
+          sudo mv oc /usr/local/bin/
+          oc version
+
+      - name: Configure OpenShift Access
+        env:
+          OPENSHIFT_SERVER: ${{ secrets.OPENSHIFT_SERVER }}
+          OPENSHIFT_TOKEN: ${{ secrets.OPENSHIFT_TOKEN }}
+        run: |
+          oc login --token=$OPENSHIFT_TOKEN --server=$OPENSHIFT_SERVER
+
+      - name: Create OpenShift Project
+        env:
+          PROJECT_NAME: "nodejs-app-${{ github.event.inputs.environment || 'development' }}"
+        run: |
+          oc new-project $PROJECT_NAME --display-name="Node.js App - ${{ github.event.inputs.environment || 'development' }}" --description="Node.js application deployment" || oc project $PROJECT_NAME
+
+      - name: Deploy Node.js App to OpenShift
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image-tag }}
+          CLOUD_PLATFORM: "openshift"
+          CLUSTER_REGION: ${{ github.event.inputs.region || 'us-east-1' }}
+          CLUSTER_NAME: ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}
+          REPLICAS: ${{ github.event.inputs.replicas || '3' }}
+          PROJECT_NAME: "nodejs-app-${{ github.event.inputs.environment || 'development' }}"
+        run: |
+          # Update deployment with environment variables
+          sed -i "s|\${REGISTRY}|$REGISTRY|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${IMAGE_TAG}|$IMAGE_TAG|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${CLOUD_PLATFORM}|$CLOUD_PLATFORM|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${CLUSTER_REGION}|$CLUSTER_REGION|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|\${CLUSTER_NAME}|$CLUSTER_NAME|g" k8s/nodejs-app/deployment.yaml
+          sed -i "s|replicas: 3|replicas: $REPLICAS|g" k8s/nodejs-app/deployment.yaml
+          
+          # Apply Kubernetes manifests
+          oc apply -f k8s/nodejs-app/deployment.yaml -n $PROJECT_NAME
+          oc apply -f k8s/nodejs-app/service.yaml -n $PROJECT_NAME
+          
+          # Create OpenShift Route instead of Ingress
+          if [ "${{ github.event.inputs.enable_ingress }}" = "true" ]; then
+            oc expose service nodejs-app-service -n $PROJECT_NAME --name=nodejs-app-route
+          fi
+          
+          # Apply HPA if enabled
+          if [ "${{ github.event.inputs.enable_hpa }}" = "true" ]; then
+            oc apply -f k8s/nodejs-app/hpa.yaml -n $PROJECT_NAME
+          fi
+
+      - name: Verify OpenShift Deployment
+        env:
+          PROJECT_NAME: "nodejs-app-${{ github.event.inputs.environment || 'development' }}"
+        run: |
+          oc get pods -n $PROJECT_NAME
+          oc get services -n $PROJECT_NAME
+          oc get routes -n $PROJECT_NAME || echo "Route not enabled"
+          oc get hpa -n $PROJECT_NAME || echo "HPA not enabled"
+
+  health-check:
+    needs: [aks-deploy, eks-deploy, gke-deploy, openshift-deploy]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Health Check Summary
+        run: |
+          echo "## Node.js App Deployment Health Check" >> $GITHUB_STEP_SUMMARY
+          echo "**Application Version:** ${{ github.event.inputs.app_version || 'v1.0.0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ github.event.inputs.environment || 'development' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Replicas:** ${{ github.event.inputs.replicas || '3' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Ingress Enabled:** ${{ github.event.inputs.enable_ingress }}" >> $GITHUB_STEP_SUMMARY
+          echo "**HPA Enabled:** ${{ github.event.inputs.enable_hpa }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Results:" >> $GITHUB_STEP_SUMMARY
+          echo "- AKS Deployment: ${{ needs.aks-deploy.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- EKS Deployment: ${{ needs.eks-deploy.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- GKE Deployment: ${{ needs.gke-deploy.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- OpenShift Deployment: ${{ needs.openshift-deploy.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+
+  summary:
+    needs: [build-and-push, aks-deploy, eks-deploy, gke-deploy, openshift-deploy, health-check]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Node.js App Deployment Summary
+        run: |
+          echo "## Node.js App Multi-Cloud Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**Target Platforms:** ${{ github.event.inputs.cloud_platform }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Application Version:** ${{ github.event.inputs.app_version || 'v1.0.0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ github.event.inputs.environment || 'development' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster Name:** ${{ github.event.inputs.cluster_name || 'multicloud-cluster' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ github.event.inputs.region || 'us-east-1' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Replicas:** ${{ github.event.inputs.replicas || '3' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Tag:** ${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Results:" >> $GITHUB_STEP_SUMMARY
+          echo "- Build and Push: ${{ needs.build-and-push.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- AKS Deployment: ${{ needs.aks-deploy.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- EKS Deployment: ${{ needs.eks-deploy.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- GKE Deployment: ${{ needs.gke-deploy.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- OpenShift Deployment: ${{ needs.openshift-deploy.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Health Check: ${{ needs.health-check.result }}" >> $GITHUB_STEP_SUMMARY 
