@@ -1,0 +1,170 @@
+# Node.js Application Configuration for Multi-Cloud Deployment
+# This file contains environment-specific configurations
+
+# Development Environment
+development:
+  replicas: 2
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  hpa:
+    enabled: false
+    min_replicas: 1
+    max_replicas: 3
+    cpu_target: 70
+    memory_target: 80
+  ingress:
+    enabled: false
+  security:
+    run_as_non_root: true
+    run_as_user: 1001
+    allow_privilege_escalation: false
+  probes:
+    liveness:
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      failure_threshold: 3
+    readiness:
+      initial_delay_seconds: 5
+      period_seconds: 5
+      timeout_seconds: 3
+      failure_threshold: 3
+
+# Staging Environment
+staging:
+  replicas: 3
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  hpa:
+    enabled: true
+    min_replicas: 2
+    max_replicas: 8
+    cpu_target: 70
+    memory_target: 80
+  ingress:
+    enabled: true
+    tls_enabled: false
+  security:
+    run_as_non_root: true
+    run_as_user: 1001
+    allow_privilege_escalation: false
+  probes:
+    liveness:
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      failure_threshold: 3
+    readiness:
+      initial_delay_seconds: 5
+      period_seconds: 5
+      timeout_seconds: 3
+      failure_threshold: 3
+
+# Production Environment
+production:
+  replicas: 5
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  hpa:
+    enabled: true
+    min_replicas: 3
+    max_replicas: 15
+    cpu_target: 70
+    memory_target: 80
+  ingress:
+    enabled: true
+    tls_enabled: true
+    cert_manager_issuer: "letsencrypt-prod"
+  security:
+    run_as_non_root: true
+    run_as_user: 1001
+    allow_privilege_escalation: false
+    security_context:
+      capabilities:
+        drop:
+        - ALL
+  probes:
+    liveness:
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      failure_threshold: 3
+    readiness:
+      initial_delay_seconds: 5
+      period_seconds: 5
+      timeout_seconds: 3
+      failure_threshold: 3
+
+# Cloud Platform Specific Configurations
+platforms:
+  aks:
+    registry: "ghcr.io"
+    ingress_class: "nginx"
+    service_type: "ClusterIP"
+    load_balancer: "azure"
+    
+  eks:
+    registry: "ghcr.io"
+    ingress_class: "nginx"
+    service_type: "ClusterIP"
+    load_balancer: "aws"
+    
+  gke:
+    registry: "ghcr.io"
+    ingress_class: "nginx"
+    service_type: "ClusterIP"
+    load_balancer: "gcp"
+    
+  openshift:
+    registry: "ghcr.io"
+    route_enabled: true
+    service_type: "ClusterIP"
+    load_balancer: "openshift"
+
+# Common Application Settings
+app:
+  name: "multicloud-nodejs-app"
+  port: 3000
+  health_path: "/health"
+  api_path: "/api/info"
+  version: "1.0.0"
+  node_env: "production"
+  
+# Monitoring and Logging
+monitoring:
+  enabled: true
+  metrics:
+    enabled: true
+    port: 9090
+    path: "/metrics"
+  logging:
+    level: "info"
+    format: "json"
+    
+# Security Settings
+security:
+  cors:
+    enabled: true
+    origin: "*"
+  helmet:
+    enabled: true
+    content_security_policy: true
+  rate_limiting:
+    enabled: false
+    window_ms: 900000
+    max_requests: 100 
